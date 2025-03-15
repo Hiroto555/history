@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ゆめハウス - 建築アニメーション</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #87CEEB; /* 空色の背景 */
+      font-family: 'Hiragino Kaku Gothic ProN', 'メイリオ', sans-serif;
+    }
+    canvas {
+      display: block;
+    }
+    #loading {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #87CEEB;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-size: 24px;
+      z-index: 1000;
+    }
+    #loading img {
+      width: 80px;
+      height: 80px;
+      margin-bottom: 20px;
+      animation: rotate 2s linear infinite;
+    }
+    @keyframes rotate {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    #replay {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      padding: 8px 16px;
+      background: rgba(255,255,255,0.7);
+      color: #333;
+      border: 1px solid #333;
+      border-radius: 4px;
+      cursor: pointer;
+      z-index: 100;
+      font-size: 16px;
+    }
+    #progress-container {
+      position: fixed;
+      bottom: 60px;
+      left: 0;
+      width: 100%;
+      height: 30px;
+      display: flex;
+      justify-content: center;
+      z-index: 100;
+    }
+    #progress-bar {
+      width: 50%;
+      height: 10px;
+      background: rgba(255,255,255,0.3);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    #progress {
+      width: 0%;
+      height: 100%;
+      background: #ff6b6b;
+      transition: width 0.3s;
+    }
+    #stage-info {
+      position: fixed;
+      top: 20px;
+      left: 0;
+      width: 100%;
+      text-align: center;
+      color: #333;
+      font-size: 20px;
+      font-weight: bold;
+      text-shadow: 0 0 5px #fff;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div style="width: 80px; height: 80px; border: 6px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: #fff; animation: rotate 1s linear infinite;"></div>
+    <p>ローディング中...</p>
+  </div>
+  
+  <div id="stage-info">土地の準備中...</div>
+  <div id="progress-container">
+    <div id="progress-bar">
+      <div id="progress"></div>
+    </div>
+  </div>
+  <button id="replay">アニメーションを再生</button>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.9.1/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/FontLoader.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/geometries/TextGeometry.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/OrbitControls.js"></script>
+  
+  <script>
+    // グローバル変数
+    let scene, camera, renderer, controls;
+    let ground, house = {}, companyTextMesh;
+    let sunLight, ambientLight;
+    let animationInProgress = false;
+    let animationTimeline;
+    let progressBar = document.getElementById('progress');
+    let stageInfo = document.getElementById('stage-info');
+    
+    // 家の構成パーツの色
+    const COLORS = {
+      ground: 0x7cbb7c,     // 緑の地面
+      foundation: 0xaaaaaa, // コンクリート色の基礎
+      walls: 0xf5f5dc,      // ベージュの壁
+      roof: 0xa52a2a,       // 茶色の屋根
+      windows: 0x87ceeb,    // 空色の窓
+      door: 0x8b4513,       // 茶色のドア
+      chimney: 0xd3d3d3,    // 煙突
+      tree: 0x228b22,       // 木の葉
+      treeTrunk: 0x8b4513,  // 木の幹
+      path: 0xd2b48c        // 石畳のパス
+    };
+    
+    // シーンの初期化
+    function init() {
+      // シーン作成
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb); // 空色の背景
+      
+      // カメラ設定
+      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(15, 15, 25);
+      
+      // レンダラー設定
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.shadowMap.enabled = true;
+      document.body.appendChild(renderer.domElement);
+      
+      // コントロール設定（カメラ操作を可能にする）
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.minDistance = 10;
+      controls.maxDistance = 50;
+      controls.maxPolarAngle = Math.PI / 2 - 0.1; // 地面より下には行かないように
+      
+      // 光源設定
+      setupLights();
+      
+      // 地面の作成
+      createGround();
+      
+      // 家のパーツを作成（最初は非表示）
+      createHouseParts();
+      
+      // 会社名のテキストを作成
+      createCompanyText();
+      
+      // ローディング画面を消す
+      document.getElementById('loading').style.display = 'none';
+      
+      // リプレイボタンのイベントリスナー
+      document.getElementById('replay').addEventListener('click', startAnimation);
+      
+      // 初回アニメーション開始
+      startAnimation();
+      
+      // イベントリスナー
+      window.addEventListener('resize', onWindowResize);
+    }
+    
+    // 光源のセットアップ
+    function setupLights() {
+      // 環境光（全体を明るくする）
+      ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+      scene.add(ambientLight);
+      
+      // 太陽光（影を作る方向光源）
+      sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      sunLight.position.set(10, 20, 15);
+      sunLight.castShadow = true;
+      
+      // 影の品質設定
+      sunLight.shadow.mapSize.width = 2048;
+      sunLight.shadow.mapSize.height = 2048;
+      sunLight.shadow.camera.near = 0.5;
+      sunLight.shadow.camera.far = 50;
+      sunLight.shadow.camera.left = -20;
+      sunLight.shadow.camera.right = 20;
+      sunLight.shadow.camera.top = 20;
+      sunLight.shadow.camera.bottom = -20;
+      
+      scene.add(sunLight);
+      
+      // スポットライト（コンストラクション用）
+      const spotLight1 = new THREE.SpotLight(0xffffff, 0.5);
+      spotLight1.position.set(-15, 15, 15);
+      spotLight1.angle = Math.PI / 6;
+      spotLight1.penumbra = 0.2;
+      scene.add(spotLight1);
+      
+      const spotLight2 = new THREE.SpotLight(0xffffff, 0.5);
+      spotLight2.position.set(15, 15, -15);
+      spotLight2.angle = Math.PI / 6;
+      spotLight2.penumbra = 0.2;
+      scene.add(spotLight2);
+    }
+    
+    // 地面の作成
+    function createGround() {
+      const groundGeometry = new THREE.PlaneGeometry(50, 50);
+      const groundMaterial = new THREE.MeshLambertMaterial({ color: COLORS.ground });
+      ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = -0.1;
+      ground.receiveShadow = true;
+      scene.add(ground);
+    }
+    
+    // 家のパーツを作成
+    function createHouseParts() {
+      // 基礎（スラブ）
+      const foundationGeometry = new THREE.BoxGeometry(12, 0.5, 10);
+      const foundationMaterial = new THREE.MeshLambertMaterial({ color: COLORS.foundation });
+      house.foundation = new THREE.Mesh(foundationGeometry, foundationMaterial);
+      house.foundation.position.y = 0;
+      house.foundation.castShadow = true;
+      house.foundation.receiveShadow = true;
+      house.foundation.visible = false;
+      scene.add(house.foundation);
+      
+      // 壁（左）
+      const leftWallGeometry = new THREE.BoxGeometry(0.3, 4, 10);
+      const wallMaterial = new THREE.MeshLambertMaterial({ color: COLORS.walls });
+      house.leftWall = new THREE.Mesh(leftWallGeometry, wallMaterial);
+      house.leftWall.position.set(-6, 2.25, 0);
+      house.leftWall.castShadow = true;
+      house.leftWall.receiveShadow = true;
+      house.leftWall.visible = false;
+      scene.add(house.leftWall);
+      
+      // 壁（右）
+      const rightWallGeometry = new THREE.BoxGeometry(0.3, 4, 10);
+      house.rightWall = new THREE.Mesh(rightWallGeometry, wallMaterial);
+      house.rightWall.position.set(6, 2.25, 0);
+      house.rightWall.castShadow = true;
+      house.rightWall.receiveShadow = true;
+      house.rightWall.visible = false;
+      scene.add(house.rightWall);
+      
+      // 壁（前）
+      const frontWallGeometry = new THREE.BoxGeometry(12, 4, 0.3);
+      house.frontWall = new THREE.Mesh(frontWallGeometry, wallMaterial);
+      house.frontWall.position.set(0, 2.25, 5);
+      house.frontWall.castShadow = true;
+      house.frontWall.receiveShadow = true;
+      house.frontWall.visible = false;
+      scene.add(house.frontWall);
+      
+      // 壁（後）
+      const backWallGeometry = new THREE.BoxGeometry(12, 4, 0.3);
+      house.backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
+      house.backWall.position.set(0, 2.25, -5);
+      house.backWall.castShadow = true;
+      house.backWall.receiveShadow = true;
+      house.backWall.visible = false;
+      scene.add(house.backWall);
+      
+      // 屋根（ピラミッド型）
+      const roofGeometry = new THREE.ConeGeometry(8.5, 4, 4);
+      const roofMaterial = new THREE.MeshLambertMaterial({ color: COLORS.roof });
+      house.roof = new THREE.Mesh(roofGeometry, roofMaterial);
+      house.roof.rotation.y = Math.PI / 4;
+      house.roof.position.set(0, 6.25, 0);
+      house.roof.castShadow = true;
+      house.roof.receiveShadow = true;
+      house.roof.visible = false;
+      scene.add(house.roof);
+      
+      // 窓（前面）
+      const windowGeometry = new THREE.PlaneGeometry(1.5, 1.5);
+      const windowMaterial = new THREE.MeshLambertMaterial({ color: COLORS.windows, side: THREE.DoubleSide });
+      
+      house.frontWindow1 = new THREE.Mesh(windowGeometry, windowMaterial);
+      house.frontWindow1.position.set(-3, 2.5, 5.01);
+      house.frontWindow1.castShadow = false;
+      house.frontWindow1.receiveShadow = false;
+      house.frontWindow1.visible = false;
+      scene.add(house.frontWindow1);
+      
+      house.frontWindow2 = new THREE.Mesh(windowGeometry, windowMaterial);
+      house.frontWindow2.position.set(3, 2.5, 5.01);
+      house.frontWindow2.castShadow = false;
+      house.frontWindow2.receiveShadow = false;
+      house.frontWindow2.visible = false;
+      scene.add(house.frontWindow2);
+      
+      // ドア
+      const doorGeometry = new THREE.PlaneGeometry(2, 3);
+      const doorMaterial = new THREE.MeshLambertMaterial({ color: COLORS.door, side: THREE.DoubleSide });
+      house.door = new THREE.Mesh(doorGeometry, doorMaterial);
+      house.door.position.set(0, 1.5, 5.01);
+      house.door.castShadow = false;
+      house.door.receiveShadow = false;
+      house.door.visible = false;
+      scene.add(house.door);
+      
+      // 煙突
+      const chimneyGeometry = new THREE.BoxGeometry(1, 2, 1);
+      const chimneyMaterial = new THREE.MeshLambertMaterial({ color: COLORS.chimney });
+      house.chimney = new THREE.Mesh(chimneyGeometry, chimneyMaterial);
+      house.chimney.position.set(-3, 7, 0);
+      house.chimney.castShadow = true;
+      house.chimney.receiveShadow = true;
+      house.chimney.visible = false;
+      scene.add(house.chimney);
+      
+      // 木（幹）
+      const treeTrunkGeometry = new THREE.CylinderGeometry(0.3, 0.5, 2, 8);
+      const treeTrunkMaterial = new THREE.MeshLambertMaterial({ color: COLORS.treeTrunk });
+      house.treeTrunk1 = new THREE.Mesh(treeTrunkGeometry, treeTrunkMaterial);
+      house.treeTrunk1.position.set(-8, 1, 8);
+      house.treeTrunk1.castShadow = true;
+      house.treeTrunk1.receiveShadow = true;
+      house.treeTrunk1.visible = false;
+      scene.add(house.treeTrunk1);
+      
+      // 木（葉）
+      const treeTopGeometry = new THREE.SphereGeometry(1.5, 8, 8);
+      const treeTopMaterial = new THREE.MeshLambertMaterial({ color: COLORS.tree });
+      house.treeTop1 = new THREE.Mesh(treeTopGeometry, treeTopMaterial);
+      house.treeTop1.position.set(-8, 3, 8);
+      house.treeTop1.castShadow = true;
+      house.treeTop1.receiveShadow = true;
+      house.treeTop1.visible = false;
+      scene.add(house.treeTop1);
+      
+      // 2本目の木
+      house.treeTrunk2 = house.treeTrunk1.clone();
+      house.treeTrunk2.position.set(10, 1, -7);
+      house.treeTrunk2.visible = false;
+      scene.add(house.treeTrunk2);
+      
+      house.treeTop2 = house.treeTop1.clone();
+      house.treeTop2.position.set(10, 3, -7);
+      house.treeTop2.visible = false;
+      scene.add(house.treeTop2);
+      
+      // 石畳
+      const pathGeometry = new THREE.PlaneGeometry(2, 5);
+      const pathMaterial = new THREE.MeshLambertMaterial({ color: COLORS.path });
+      house.path = new THREE.Mesh(pathGeometry, pathMaterial);
+      house.path.rotation.x = -Math.PI / 2;
+      house.path.position.set(0, 0.01, 7.5);
+      house.path.receiveShadow = true;
+      house.path.visible = false;
+      scene.add(house.path);
+    }
+    
+    // 会社名のテキスト作成
+    function createCompanyText() {
+      // フォントローダーの初期化
+      const fontLoader = new THREE.FontLoader();
+      
+      // フォントの読み込み
+      fontLoader.load('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/fonts/helvetiker_bold.typeface.json', function(font) {
+        // テキストジオメトリの作成
+        const textGeometry = new THREE.TextGeometry('ゆめハウス', {
+          font: font,
+          size: 3,
+          height: 0.5,
+          curveSegments: 12,
+          bevelEnabled: true,
+          bevelThickness: 0.1,
+          bevelSize: 0.05,
+          bevelOffset: 0,
+          bevelSegments: 5
+        });
+        
+        // テキストを中央に配置
+        textGeometry.computeBoundingBox();
+        const textWidth = textGeometry.boundingBox.max.x - textGeometry.boundingBox.min.x;
+        textGeometry.translate(-textWidth / 2, 0, 0);
+        
+        // テキストのマテリアル
+        const textMaterial = new THREE.MeshStandardMaterial({
+          color: 0xffa500, // オレンジ色
+          metalness: 0.8,
+          roughness: 0.2,
+          emissive: 0x222222
+        });
+        
+        // テキストメッシュの作成
+        companyTextMesh = new THREE.Mesh(textGeometry, textMaterial);
+        companyTextMesh.position.set(0, 10, 0);
+        companyTextMesh.castShadow = true;
+        companyTextMesh.visible = false;
+        scene.add(companyTextMesh);
+      });
+    }
+    
+    // アニメーションスタート
+    function startAnimation() {
+      if (animationInProgress) return;
+      animationInProgress = true;
+      
+      // すべての要素を初期状態に戻す
+      resetHouseParts();
+      
+      // メインのタイムライン作成
+      animationTimeline = gsap.timeline({
+        onUpdate: updateProgress,
+        onComplete: function() {
+          animationInProgress = false;
+        }
+      });
+      
+      // 建設ステージのアニメーション
+      animateConstructionStages();
+    }
+    
+    // 家のパーツを初期状態に戻す
+    function resetHouseParts() {
+      // すべてのパーツを非表示に
+      Object.values(house).forEach(part => {
+        if (part) part.visible = false;
+      });
+      
+      // 会社名を非表示に
+      if (companyTextMesh) companyTextMesh.visible = false;
+      
+      // カメラを初期位置に戻す
+      gsap.to(camera.position, {
+        duration: 1,
+        x: 15,
+        y: 15,
+        z: 25,
+        ease: 'power1.inOut'
+      });
+    }
+    
+    // 建設ステージのアニメーション
+    function animateConstructionStages() {
+      // ステージ1: 土地の整備
+      animationTimeline.to({}, {
+        duration: 2,
+        onStart: function() {
+          updateStageInfo('土地の整備中...');
+        },
+        onComplete: function() {
+          // 特に何も表示せず、土地だけ見せる
+        }
+      });
+      
+      // ステージ2: 基礎工事
+      animationTimeline.to(house.foundation.position, {
+        duration: 1.5,
+        y: 0.25,
+        ease: 'bounce.out',
+        onStart: function() {
+          updateStageInfo('基礎工事中...');
+          house.foundation.visible = true;
+          house.foundation.position.y = 10; // 上から落ちてくる
+        }
+      });
+      
+      // カメラをズームイン
+      animationTimeline.to(camera.position, {
+        duration: 2,
+        x: 12,
+        y: 8,
+        z: 20,
+        ease: 'power1.inOut'
+      }, '-=0.5');
+      
+      // ステージ3: 壁の建設
+      animationTimeline.to({}, {
+        duration: 0.5,
+        onStart: function() {
+          updateStageInfo('壁を建設中...');
+        }
+      });
+      
+      // 左壁
+      animationTimeline.to(house.leftWall.scale, {
+        duration: 1,
+        y: 1,
+        ease: 'power1.out',
+        onStart: function() {
+          house.leftWall.visible = true;
+          house.leftWall.scale.set(1, 0, 1);
+          house.leftWall.position.y = 0.5;
+        }
+      });
+      
+      // 右壁
+      animationTimeline.to(house.rightWall.scale, {
+        duration: 1,
+        y: 1,
+        ease: 'power1.out',
+        onStart: function() {
+          house.rightWall.visible = true;
+          house.rightWall.scale.set(1, 0, 1);
+          house.rightWall.position.y = 0.5;
+        }
+      }, '-=0.7');
+      
+      // 前壁
+      animationTimeline.to(house.frontWall.scale, {
+        duration: 1,
+        y: 1,
+        ease: 'power1.out',
+        onStart: function() {
+          house.frontWall.visible = true;
+          house.frontWall.scale.set(1, 0, 1);
+          house.frontWall.position.y = 0.5;
+        }
+      }, '-=0.7');
+      
+      // 後壁
+      animationTimeline.to(house.backWall.scale, {
+        duration: 1,
+        y: 1,
+        ease: 'power1.out',
+        onStart: function() {
+          house.backWall.visible = true;
+          house.backWall.scale.set(1, 0, 1);
+          house.backWall.position.y = 0.5;
+        }
+      }, '-=0.7');
+      
+      // カメラ移動（横から屋根を見る位置へ）
+      animationTimeline.to(camera.position, {
+        duration: 2,
+        x: 0,
+        y: 12,
+        z: 20,
+        ease: 'power1.inOut'
+      });
+      
+      // ステージ4: 屋根の設置
+      animationTimeline.to(house.roof.position, {
+        duration: 1.5,
+        y: 4.5,
+        ease: 'bounce.out',
+        onStart: function() {
+          updateStageInfo('屋根を設置中...');
+          house.roof.visible = true;
+          house.roof.position.y = 15; // 上から落ちてくる
+        }
+      });
+      
+      // ステージ5: 窓とドアの設置
+      animationTimeline.to({}, {
+        duration: 0.5,
+        onStart: function() {
+          updateStageInfo('窓とドアを設置中...');
+        }
+      });
+      
+      // 窓1
+      animationTimeline.to(house.frontWindow1.scale, {
+        duration: 0.8,
+        x: 1,
+        y: 1,
+        ease: 'back.out(1.7)',
+        onStart: function() {
+          house.frontWindow1.visible = true;
+          house.frontWindow1.scale.set(0, 0, 1);
+        }
+      });
+      
+      // 窓2
+      animationTimeline.to(house.frontWindow2.scale, {
+        duration: 0.8,
+        x: 1,
+        y: 1,
+        ease: 'back.out(1.7)',
+        onStart: function() {
+          house.frontWindow2.visible = true;
+          house.frontWindow2.scale.set(0, 0, 1);
+        }
+      }, '-=0.4');
+      
+      // ドア
+      animationTimeline.to(house.door.scale, {
+        duration: 1,
+        x: 1,
+        y: 1,
+        ease: 'back.out(1.7)',
+        onStart: function() {
+          house.door.visible = true;
+          house.door.scale.set(0, 0, 1);
+        }
+      }, '-=0.4');
+      
+      // 煙突
+      animationTimeline.to(house.chimney.scale, {
+        duration: 1,
+        y: 1,
+        ease: 'power1.out',
+        onStart: function() {
+          house.chimney.visible = true;
+          house.chimney.scale.set(1, 0, 1);
+          house.chimney.position.y = 6;
+        }
+      });
+      
+      // ステージ6: 外構工事
+      animationTimeline.to({}, {
+        duration: 0.5,
+        onStart: function() {
+          updateStageInfo('外構工事中...');
+        }
+      });
+      
+      // 庭の道
+      animationTimeline.to(house.path.scale, {
+        duration: 1,
+        x: 1,
+        z: 1,
+        ease: 'power1.out',
+        onStart: function() {
+          house.path.visible = true;
+          house.path.scale.set(0, 1, 0);
+        }
+      });
+      
+      // 木1
+      animationTimeline.to([house.treeTrunk1.scale, house.treeTop1.scale], {
+        duration: 1.2,
+        x: 1,
+        y: 1,
+        z: 1,
+        ease: 'elastic.out(1, 0.5)',
+        onStart: function() {
+          house.treeTrunk1.visible = true;
+          house.treeTop1.visible = true;
+          house.treeTrunk1.scale.set(0, 0, 0);
+          house.treeTop1.scale.set(0, 0, 0);
+        }
+      }, '-=0.5');
+      
+      // 木2
+      animationTimeline.to([house.treeTrunk2.scale, house.treeTop2.scale], {
+        duration: 1.2,
+        x: 1,
+        y: 1,
+        z: 1,
+        ease: 'elastic.out(1, 0.5)',
+        onStart: function() {
+          house.treeTrunk2.visible = true;
+          house.treeTop2.visible = true;
+          house.treeTrunk2.scale.set(0, 0, 0);
+          house.treeTop2.scale.set(0, 0, 0);
+        }
+      }, '-=0.8');
+      
+      // カメラを完成した家を見る位置に移動
+      animationTimeline.to(camera.position, {
+        duration: 2,
+        x: 15,
+        y: 10,
+        z: 20,
+        ease: 'power2.inOut',
+        onStart: function() {
+          updateStageInfo('建設完了！');
+        }
+      });
+      
+      // ステージ7: 完成と会社名の表示
+      animationTimeline.to({}, {
+        duration: 1,
+        onComplete: function() {
+          // スポットライト効果のための準備
+          createSpotlightEffect();
+        }
+      });
+      
+      // カメラを回転させながら会社名テキスト位置へ
+      animationTimeline.to(camera.position, {
+        duration: 3,
+        x: 0,
+        y: 10,
+        z: 25,
+        ease: 'power2.inOut',
+        onStart: function() {
+          updateStageInfo('');
+        }
+      });
+      
+      // 会社名の表示
+      animationTimeline.to({}, {
+        duration: 0.5,
+        onStart: function() {
+          if (companyTextMesh) {
+            companyTextMesh.visible = true;
+            // テキストを初期位置に
+            companyTextMesh.position.set(0, 10, 0);
+            companyTextMesh.rotation.y = 0;
+            // テキストに光沢アニメーションを適用
+            animateTextGlow();
+          }
+        },
+        onComplete: function() {
+          updateStageInfo('ゆめハウス');
+        }
+      });
+      
+      // テキストのアニメーション
+      animationTimeline.to(companyTextMesh.position, {
+        duration: 2,
+        y: 12,
+        ease: 'power2.out'
+      });
+      
+      // テキストを回転させる
+      animationTimeline.to(companyTextMesh.rotation, {
+        duration: 8,
+        y: Math.PI * 2,
+        ease: 'none',
+        repeat: -1 // 無限ループ
+      }, '-=2');
+    }
+    
+    // スポットライト効果の作成
+    function createSpotlightEffect() {
+      // スポットライトの追加
+      for (let i = 0; i < 4; i++) {
+        const spotLight = new THREE.SpotLight(0xffffff, 2);
+        spotLight.position.set(
+          20 * Math.cos(i * Math.PI / 2),
+          15,
+          20 * Math.sin(i * Math.PI / 2)
+        );
+        spotLight.angle = Math.PI / 6;
+        spotLight.penumbra = 0.2;
+        spotLight.decay = 1;
+        spotLight.distance = 50;
+        spotLight.target = companyTextMesh || new THREE.Object3D();
+        
+        // 光の円錐を可視化
+        const spotLightHelper = new THREE.SpotLightHelper(spotLight);
+        
+        scene.add(spotLight);
+        
+        // スポットライトのアニメーション
+        gsap.fromTo(spotLight, 
+          { intensity: 0 },
+          { 
+            intensity: 3, 
+            duration: 2, 
+            ease: 'power2.out',
+            yoyo: true,
+            repeat: -1
+          }
+        );
+      }
+    }
+    
+    // テキストの光沢アニメーション
+    function animateTextGlow() {
+      if (!companyTextMesh) return;
+      
+      // エミッシブカラーのアニメーション
+      gsap.to(companyTextMesh.material, {
+        duration: 1.5,
+        emissive: new THREE.Color(0xff6600),
+        yoyo: true,
+        repeat: -1
+      });
+    }
+    
+    // 進捗バーの更新
+    function updateProgress() {
+      const progress = animationTimeline ? animationTimeline.progress() * 100 : 0;
+      progressBar.style.width = `${progress}%`;
+    }
+    
+    // ステージ情報の更新
+    function updateStageInfo(text) {
+      stageInfo.textContent = text;
+    }
+    
+    // ウィンドウサイズ変更時の処理
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+    
+    // アニメーションループ
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    
+    // 初期化と実行
+    init();
+    animate();
+  </script>
+</body>
+</html>
